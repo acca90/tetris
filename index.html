@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Boy Tetris</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #111829;
+    --grid: #19223a;
+    --ink: #c9cfe6;
+    --dim: #6c78a3;
+    --s: 3;               /* pixel scale, set from JS */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px;
+    color: var(--ink);
+    font-family: "Press Start 2P", ui-monospace, monospace;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; overflow: hidden; user-select: none;
+  }
+  .stage { position: relative; }
+  #screen {
+    display: block; image-rendering: pixelated; touch-action: none;
+    filter: drop-shadow(calc(var(--s) * 5px) calc(var(--s) * 5px) 0 rgba(4, 6, 14, .55));
+  }
+  .sticker {
+    position: absolute; pointer-events: none;
+    image-rendering: pixelated; background-repeat: no-repeat;
+  }
+  .spark {
+    width: calc(var(--s) * 11px); height: calc(var(--s) * 11px);
+    background-size: calc(var(--s) * 22px) calc(var(--s) * 11px);
+    animation: twinkle 1.6s steps(1) infinite;
+  }
+  .spark.y { background-image: url(assets/spark-yellow.png); }
+  .spark.t { background-image: url(assets/spark-teal.png); }
+  .spark.p { background-image: url(assets/spark-pink.png); }
+  @keyframes twinkle {
+    0%  { background-position: 0 0; }
+    50% { background-position: calc(var(--s) * -11px) 0; }
+  }
+  .cursor {
+    width: calc(var(--s) * 8px); height: calc(var(--s) * 13px);
+    background-image: url(assets/cursor.png); background-size: 100% 100%;
+    animation: bob 1.2s steps(2) infinite;
+  }
+  @keyframes bob { 50% { transform: translate(calc(var(--s) * -1px), calc(var(--s) * -1px)); } }
+  .keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 18px; font-size: 8px; color: var(--dim); max-width: 92vw; }
+  .arr { width: 10px; height: 6px; fill: currentColor; shape-rendering: crispEdges; vertical-align: middle; }
+  .keys span { display: inline-flex; align-items: center; gap: 7px; }
+  kbd {
+    font-family: inherit; font-size: 8px; color: #1d2438; padding: 5px 6px 4px;
+    background: var(--k, #f1e8cc);
+    box-shadow: inset -2px -2px 0 rgba(29, 36, 56, .28), 0 0 0 2px #1d2438, 2px 2px 0 2px #1d2438;
+  }
+</style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <canvas id="screen"></canvas>
+  </div>
+  <div class="keys">
+    <span><kbd style="--k:#6fcad6"><svg class="arr" style="transform:rotate(-90deg)" viewBox="0 0 5 3"><path d="M2 0h1v1h1v1h1v1H0V2h1V1h1z"/></svg> <svg class="arr" style="transform:rotate(90deg)" viewBox="0 0 5 3"><path d="M2 0h1v1h1v1h1v1H0V2h1V1h1z"/></svg></kbd>MOVE</span>
+    <span><kbd style="--k:#6fcad6"><svg class="arr" style="transform:rotate(0deg)" viewBox="0 0 5 3"><path d="M2 0h1v1h1v1h1v1H0V2h1V1h1z"/></svg></kbd>ROTATE</span>
+    <span><kbd style="--k:#6fcad6"><svg class="arr" style="transform:rotate(180deg)" viewBox="0 0 5 3"><path d="M2 0h1v1h1v1h1v1H0V2h1V1h1z"/></svg></kbd>SOFT DROP</span>
+    <span><kbd style="--k:#e8566c">SPACE</kbd>DROP</span>
+    <span><kbd style="--k:#f2a93b">E</kbd>HOLD</span>
+    <span><kbd style="--k:#7fbf6a">ENTER</kbd>START/PAUSE</span>
+    <span><kbd style="--k:#9a82e0">M</kbd>MUTE</span>
+  </div>
+
+<script src="assets/layout.js"></script>
+<script>
+"use strict";
+const L = window.LAYOUT;
+
+// ---------------------------------------------------------------- constants
+const COLS = 10, ROWS = 22, HIDDEN = 2, T = 8;
+const GHOST = 7, DEAD = 8;
+const DAS = 0.16, ARR = 0.04, LOCK_DELAY = 0.5, MAX_RESETS = 15, CLEAR_TIME = 0.36;
+const BOOT_TIME = 2.4;
+
+// LCD-local layout (the LCD is 176x168)
+const WELL = { x: 48, y: 4 };
+const HOLDBOX = { x: 4, y: 11, w: 38, h: 26 };
+const NEXTBOX = { x: 134, y: 11, w: 38, h: 76 };
+
+const C = {
+  lcd: "#1b2340", lcdDot: "#222c4d", well: "#121a31", wellDot: "#1c2644",
+  frameDark: "#0c1122", frameLite: "#3d4b78",
+  label: "#6fcad6", value: "#f3ecd2", dim: "#6c78a3",
+  cream: "#f3ecd2", creamShade: "#d9cfae", navy: "#1d2438",
+  teal: "#2d9cb4", coral: "#e8566c", mustard: "#f2a93b", yellow: "#f6d45a",
+  sage: "#7fbf6a", lav: "#9a82e0", pink: "#f28aa0",
+};
+const RAINBOW = [C.coral, C.mustard, C.yellow, C.sage, C.label, C.lav];
+
+// Piece order matches assets/tiles.png: I O T S Z J L
+const BASE = [
+  [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+  [[1,1],[1,1]],
+  [[0,1,0],[1,1,1],[0,0,0]],
+  [[0,1,1],[1,1,0],[0,0,0]],
+  [[1,1,0],[0,1,1],[0,0,0]],
+  [[1,0,0],[1,1,1],[0,0,0]],
+  [[0,0,1],[1,1,1],[0,0,0]],
+];
+const rotCW = m => m.map((row, y) => row.map((_, x) => m[m.length - 1 - x][y]));
+const cellsOf = m => m.flatMap((row, y) => row.flatMap((v, x) => v ? [[x, y]] : []));
+const SHAPES = BASE.map(m => {
+  const out = []; let cur = m;
+  for (let r = 0; r < 4; r++) { out.push(cellsOf(cur)); cur = rotCW(cur); }
+  return out;
+});
+
+// SRS wall kicks (y is up in the spec; applied as y - ky)
+const KICK_JLSTZ = {
+  "0>1": [[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]], "1>0": [[0,0],[1,0],[1,-1],[0,2],[1,2]],
+  "1>2": [[0,0],[1,0],[1,-1],[0,2],[1,2]],     "2>1": [[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]],
+  "2>3": [[0,0],[1,0],[1,1],[0,-2],[1,-2]],    "3>2": [[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],
+  "3>0": [[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],  "0>3": [[0,0],[1,0],[1,1],[0,-2],[1,-2]],
+};
+const KICK_I = {
+  "0>1": [[0,0],[-2,0],[1,0],[-2,-1],[1,2]], "1>0": [[0,0],[2,0],[-1,0],[2,1],[-1,-2]],
+  "1>2": [[0,0],[-1,0],[2,0],[-1,2],[2,-1]], "2>1": [[0,0],[1,0],[-2,0],[1,-2],[-2,1]],
+  "2>3": [[0,0],[2,0],[-1,0],[2,1],[-1,-2]], "3>2": [[0,0],[-2,0],[1,0],[-2,-1],[1,2]],
+  "3>0": [[0,0],[1,0],[-2,0],[1,-2],[-2,1]], "0>3": [[0,0],[-1,0],[2,0],[-1,2],[2,-1]],
+};
+
+// ---------------------------------------------------------------- canvas + assets
+const cv = document.getElementById("screen");
+cv.width = L.W; cv.height = L.H;
+const ctx = cv.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+let scale = 3;
+
+function loadImg(src) {
+  return new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = src; });
+}
+const IMG = {};
+
+function fitScale() {
+  const fit = Math.min((innerWidth - 40) / L.W, (innerHeight - 90) / L.H);
+  const dpr = devicePixelRatio || 1;
+  const snapped = Math.floor(fit * dpr) / dpr;          // whole device pixels per art pixel
+  scale = Math.max(1, snapped >= fit * 0.85 ? snapped : fit);
+  document.documentElement.style.setProperty("--s", scale);
+  cv.style.width = L.W * scale + "px"; cv.style.height = L.H * scale + "px";
+  const st = document.getElementById("stage");
+  st.style.width = cv.style.width; st.style.height = cv.style.height;
+}
+addEventListener("resize", fitScale); fitScale();
+
+// Page stickers, positioned in device pixels
+const STICKERS = [
+  ["spark y", -30, 18, 0], ["spark t", -18, 44, .5], ["spark p", 248, 30, .9],
+  ["spark y", 256, 120, .2], ["spark t", -34, 170, 1.1], ["spark p", -22, 262, .6],
+  ["spark y", 250, 214, 1.3], ["cursor", 216, 262, 0],
+];
+for (const [cls, x, y, delay] of STICKERS) {
+  const d = document.createElement("div");
+  d.className = "sticker " + cls;
+  d.style.left = `calc(var(--s) * ${x}px)`; d.style.top = `calc(var(--s) * ${y}px)`;
+  d.style.animationDelay = delay + "s";
+  document.getElementById("stage").appendChild(d);
+}
+
+// Pixel font: 3x5 glyphs, recoloured on demand
+const fontCache = new Map();
+function fontIn(color) {
+  if (!fontCache.has(color)) {
+    const c = document.createElement("canvas");
+    c.width = IMG.font.width; c.height = IMG.font.height;
+    const x = c.getContext("2d");
+    x.drawImage(IMG.font, 0, 0);
+    x.globalCompositeOperation = "source-in";
+    x.fillStyle = color; x.fillRect(0, 0, c.width, c.height);
+    fontCache.set(color, c);
+  }
+  return fontCache.get(color);
+}
+const textW = (s, k = 1) => s.length * 4 * k - k;
+function text(str, x, y, color, k = 1) {
+  str = String(str).toUpperCase();
+  for (let i = 0; i < str.length; i++) {
+    const g = L.fontChars.indexOf(str[i]);
+    if (g <= 0) continue;
+    const f = Array.isArray(color) ? color[i % color.length] : color;
+    ctx.drawImage(fontIn(f), g * 3, 0, 3, 5, x + i * 4 * k, y, 3 * k, 5 * k);
+  }
+}
+function textC(str, cx, y, color, k = 1) { text(str, Math.round(cx - textW(String(str), k) / 2), y, color, k); }
+function shadowText(str, cx, y, color, k = 1) { textC(str, cx + 1, y + 1, C.frameDark, k); textC(str, cx, y, color, k); }
+
+const rect = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); };
+const tile = (idx, x, y) => ctx.drawImage(IMG.tiles, idx * T, 0, T, T, x, y, T, T);
+
+// ---------------------------------------------------------------- audio
+let actx = null, master, musicGain, sfxGain, muted = false;
+function ensureAudio() {
+  if (actx) { if (actx.state === "suspended" && state !== "paused") actx.resume(); return; }
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  master = actx.createGain(); master.gain.value = 0.5; master.connect(actx.destination);
+  musicGain = actx.createGain(); musicGain.gain.value = 0.55; musicGain.connect(master);
+  sfxGain = actx.createGain(); sfxGain.gain.value = 0.7; sfxGain.connect(master);
+  setInterval(scheduleMusic, 25);
+}
+const hz = midi => 440 * Math.pow(2, (midi - 69) / 12);
+
+function voice(dest, type, freq, t, dur, vol, slideTo) {
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vol, t + 0.005);
+  g.gain.setValueAtTime(vol, t + Math.max(0.006, dur * 0.7));
+  g.gain.linearRampToValueAtTime(0, t + dur);
+  o.connect(g); g.connect(dest); o.start(t); o.stop(t + dur + 0.02);
+}
+
+// Korobeiniki (Russian folk song, public domain) — the classic Type-A arrangement.
+// [midi, beats]; 0 = rest.
+const PART_A = [
+  [76,1],[71,.5],[72,.5],[74,1],[72,.5],[71,.5],
+  [69,1],[69,.5],[72,.5],[76,1],[74,.5],[72,.5],
+  [71,1.5],[72,.5],[74,1],[76,1],
+  [72,1],[69,1],[69,1],[0,1],
+  [0,.5],[74,1],[77,.5],[81,1],[79,.5],[77,.5],
+  [76,1.5],[72,.5],[76,1],[74,.5],[72,.5],
+  [71,1],[71,.5],[72,.5],[74,1],[76,1],
+  [72,1],[69,1],[69,1],[0,1],
+];
+const PART_C = [
+  [76,2],[72,2],[74,2],[71,2],[72,2],[69,2],[68,2],[71,1],[0,1],
+  [76,2],[72,2],[74,2],[71,2],[72,1],[76,1],[81,2],[80,4],
+];
+const MELODY = [...PART_A, ...PART_A, ...PART_C];
+// Bass: one chord root per bar, walked as octave eighths
+const BASS_ROOTS_A = [40,45,40,45,50,48,40,45];
+const BASS_ROOTS_C = [45,40,45,40,45,40,45,40];
+const BASS = [...BASS_ROOTS_A, ...BASS_ROOTS_A, ...BASS_ROOTS_C]
+  .flatMap(r => Array.from({ length: 8 }, (_, i) => [i % 2 ? r + 12 : r, .5]));
+
+let musicOn = false, anchorT = 0, anchorB = 0, spb = 60 / 132;
+const tracks = [
+  { ev: MELODY, i: 0, b: 0, type: "square",   vol: 0.16, gap: 0.88 },
+  { ev: BASS,   i: 0, b: 0, type: "triangle", vol: 0.32, gap: 0.8 },
+];
+const beatTime = b => anchorT + (b - anchorB) * spb;
+
+function startMusic() {
+  if (!actx) return;
+  musicOn = true; anchorT = actx.currentTime + 0.08; anchorB = 0;
+  tracks.forEach(tr => { tr.i = 0; tr.b = 0; });
+  setTempo(level);
+}
+function stopMusic() { musicOn = false; }
+function setTempo(lvl) {
+  if (!actx) return;
+  const now = actx.currentTime;
+  if (now > anchorT) { anchorB += (now - anchorT) / spb; anchorT = now; }
+  spb = 60 / Math.min(200, 132 + (lvl - 1) * 6);
+}
+function scheduleMusic() {
+  if (!musicOn || actx.state !== "running") return;
+  const horizon = actx.currentTime + 0.15;
+  for (const tr of tracks) {
+    while (beatTime(tr.b) < horizon) {
+      const [note, beats] = tr.ev[tr.i];
+      const t = Math.max(beatTime(tr.b), actx.currentTime);
+      if (note) voice(musicGain, tr.type, hz(note), t, beats * spb * tr.gap, tr.vol);
+      tr.b += beats; tr.i = (tr.i + 1) % tr.ev.length;
+    }
+  }
+}
+
+const SFX = {
+  move()   { voice(sfxGain, "square", 220, actx.currentTime, 0.03, 0.06); },
+  rotate() { voice(sfxGain, "square", 523, actx.currentTime, 0.05, 0.08, 784); },
+  hold()   { const t = actx.currentTime; voice(sfxGain, "triangle", 660, t, 0.06, 0.3); voice(sfxGain, "triangle", 440, t + 0.06, 0.08, 0.3); },
+  lock()   { voice(sfxGain, "triangle", 140, actx.currentTime, 0.1, 0.5, 70); },
+  drop()   { voice(sfxGain, "square", 300, actx.currentTime, 0.12, 0.12, 60); },
+  clear(n) {
+    const t = actx.currentTime, notes = n === 4 ? [72,76,79,84,88,91] : [72,76,79,84].slice(0, n + 1);
+    notes.forEach((m, i) => voice(sfxGain, "square", hz(m), t + i * 0.055, 0.09, 0.12));
+  },
+  level()  { const t = actx.currentTime; [79,84,88].forEach((m, i) => voice(sfxGain, "triangle", hz(m), t + i * 0.08, 0.12, 0.35)); },
+  over()   { const t = actx.currentTime; [67,63,60,55,48].forEach((m, i) => voice(sfxGain, "square", hz(m), t + i * 0.16, 0.18, 0.12)); },
+  click()  { voice(sfxGain, "square", 880, actx.currentTime, 0.025, 0.05); },
+  // the two-note power-on chime
+  ding()   { const t = actx.currentTime; voice(sfxGain, "square", hz(84), t, 0.07, 0.12); voice(sfxGain, "square", hz(96), t + 0.07, 0.6, 0.12); },
+};
+const sfx = (name, ...a) => { if (actx) SFX[name](...a); };
+
+// ---------------------------------------------------------------- state
+// off -> boot -> title -> playing <-> paused / clearing -> over -> playing ...
+let state = "off", stateT = 0;
+let board = null, queue = [], cur = null, hold = null, canHold = true;
+let score = 0, lines = 0, level = 1, newBest = false, playTime = 0, tetrises = 0;
+let fallAcc = 0, lockT = 0, resets = 0, lowestY = 0, clearRows = [], clearT = 0;
+let popups = [], shake = 0;
+let best = 0;
+try { best = +localStorage.getItem("pixel-tetris.best") || 0; } catch {}
+
+const held = { left: false, right: false, down: false };
+const lit = new Set();            // device buttons drawn pressed
+let dir = 0, dasT = 0, arrT = 0;
+
+function setState(s) { state = s; stateT = 0; }
+
+function bag() {
+  const b = [0,1,2,3,4,5,6];
+  for (let i = b.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [b[i], b[j]] = [b[j], b[i]]; }
+  return b;
+}
+function nextType() { while (queue.length < 8) queue.push(...bag()); return queue.shift(); }
+
+function collide(type, rot, x, y) {
+  for (const [cx, cy] of SHAPES[type][rot]) {
+    const bx = x + cx, by = y + cy;
+    if (bx < 0 || bx >= COLS || by >= ROWS) return true;
+    if (by >= 0 && board[by][bx] >= 0) return true;
+  }
+  return false;
+}
+const grounded = () => collide(cur.type, cur.rot, cur.x, cur.y + 1);
+const gravity = () => Math.pow(0.8 - (level - 1) * 0.007, level - 1);
+
+function newGame() {
+  board = Array.from({ length: ROWS }, () => Array(COLS).fill(-1));
+  queue = []; hold = null; canHold = true; popups = [];
+  score = 0; lines = 0; level = 1; newBest = false; playTime = 0; tetrises = 0;
+  setState("playing");
+  spawn(nextType());
+  startMusic();
+}
+
+function spawn(type) {
+  const n = BASE[type].length;
+  cur = { type, rot: 0, x: (COLS - n) >> 1, y: 0 };
+  fallAcc = 0; lockT = 0; resets = 0;
+  if (collide(type, 0, cur.x, cur.y)) return gameOver();
+  if (!grounded()) cur.y++;
+  lowestY = cur.y;
+}
+
+function afterMove() {
+  if (grounded() && resets < MAX_RESETS) { lockT = 0; resets++; }
+}
+function move(dx) {
+  if (collide(cur.type, cur.rot, cur.x + dx, cur.y)) return false;
+  cur.x += dx; afterMove(); sfx("move"); return true;
+}
+function rotate(d) {
+  if (cur.type === 1) return;
+  const to = (cur.rot + d + 4) % 4;
+  const kicks = (cur.type === 0 ? KICK_I : KICK_JLSTZ)[cur.rot + ">" + to];
+  for (const [kx, ky] of kicks) {
+    if (!collide(cur.type, to, cur.x + kx, cur.y - ky)) {
+      cur.x += kx; cur.y -= ky; cur.rot = to; afterMove(); sfx("rotate"); return;
+    }
+  }
+}
+function dropDistance() {
+  let d = 0;
+  while (!collide(cur.type, cur.rot, cur.x, cur.y + d + 1)) d++;
+  return d;
+}
+function hardDrop() {
+  const d = dropDistance();
+  cur.y += d; score += 2 * d;
+  sfx("drop"); shake = 0.09;
+  lock();
+}
+function doHold() {
+  if (!canHold) return;
+  const t = cur.type;
+  canHold = false;
+  if (hold === null) { hold = t; spawn(nextType()); }
+  else { const h = hold; hold = t; spawn(h); }
+  sfx("hold");
+}
+
+function lock() {
+  let allHidden = true;
+  for (const [cx, cy] of SHAPES[cur.type][cur.rot]) {
+    const y = cur.y + cy;
+    if (y >= 0) board[y][cur.x + cx] = cur.type;
+    if (y >= HIDDEN) allHidden = false;
+  }
+  if (allHidden) return gameOver();
+  const full = [];
+  board.forEach((row, y) => { if (row.every(v => v >= 0)) full.push(y); });
+  if (full.length) {
+    setState("clearing"); clearRows = full; clearT = 0; cur = null;
+    sfx("clear", full.length);
+  } else {
+    sfx("lock");
+    afterLock();
+  }
+}
+function finishClear() {
+  const n = clearRows.length;
+  board = board.filter((_, y) => !clearRows.includes(y));
+  while (board.length < ROWS) board.unshift(Array(COLS).fill(-1));
+  lines += n;
+  if (n === 4) tetrises++;
+  score += [0, 100, 300, 500, 800][n] * level;
+  const newLevel = Math.floor(lines / 10) + 1;
+  popup(["", "", "DOUBLE", "TRIPLE", "TETRIS!"][n]);
+  if (newLevel > level) { level = newLevel; setTempo(level); sfx("level"); popup("LEVEL " + level); }
+  setState("playing");
+  afterLock();
+}
+function afterLock() { canHold = true; if (state === "playing") spawn(nextType()); }
+
+function gameOver() {
+  setState("over"); stopMusic(); sfx("over");
+  if (score > best) {
+    best = score; newBest = true;
+    try { localStorage.setItem("pixel-tetris.best", best); } catch {}
+  }
+}
+
+function togglePause() {
+  if (state === "playing") { setState("paused"); if (actx) actx.suspend(); }
+  else if (state === "paused") { setState("playing"); if (actx) actx.resume(); }
+}
+function popup(textStr) { if (textStr) popups.push({ text: textStr, t: 0 }); }
+
+// ---------------------------------------------------------------- input
+// Keyboard and on-device clicks both go through press()/release() by button name.
+const KEYMAP = {
+  ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+  Space: "a", KeyE: "b", Enter: "start", KeyP: "start", Escape: "start", KeyM: "select",
+};
+
+function press(btn, repeat = false) {
+  ensureAudio();
+  if (L.controls[btn]) lit.add(btn);
+  if (repeat && btn !== "down") return;
+
+  if (btn === "select") {
+    muted = !muted; if (master) master.gain.value = muted ? 0 : 0.5;
+    return;
+  }
+  if (state === "off") { setState("boot"); return; }
+  if (state === "boot") return;
+  if (state === "title" && (btn === "start" || btn === "a")) { sfx("click"); return newGame(); }
+  if (state === "over") {
+    if (stateT > 1 && (btn === "start" || btn === "a")) { sfx("click"); newGame(); }
+    return;
+  }
+  if (btn === "start") return togglePause();
+  if (state !== "playing") return;
+  switch (btn) {
+    case "left":  held.left = true;  dir = -1; dasT = arrT = 0; move(-1); break;
+    case "right": held.right = true; dir = 1;  dasT = arrT = 0; move(1); break;
+    case "down":  held.down = true; break;
+    case "up":    rotate(1); break;
+    case "ccw":   rotate(-1); break;
+    case "a":     hardDrop(); break;
+    case "b":     doHold(); break;
+  }
+}
+function release(btn) {
+  lit.delete(btn);
+  if (btn === "left")  { held.left = false;  if (dir === -1) { dir = held.right ? 1 : 0; dasT = arrT = 0; } }
+  if (btn === "right") { held.right = false; if (dir === 1)  { dir = held.left ? -1 : 0; dasT = arrT = 0; } }
+  if (btn === "down") held.down = false;
+}
+
+addEventListener("keydown", e => {
+  const btn = e.code === "KeyZ" ? "ccw" : KEYMAP[e.code];
+  if (!btn) return;
+  e.preventDefault();
+  press(btn, e.repeat);
+});
+addEventListener("keyup", e => {
+  const btn = e.code === "KeyZ" ? "ccw" : KEYMAP[e.code];
+  if (btn) release(btn);
+});
+addEventListener("blur", () => {
+  for (const b of [...lit]) release(b);
+  held.left = held.right = held.down = false; dir = 0;
+  if (state === "playing") togglePause();
+});
+
+// Click / touch the buttons on the device itself
+const pointerBtn = new Map();
+function hitButton(e) {
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * L.W, y = (e.clientY - r.top) / r.height * L.H;
+  for (const [name, b] of Object.entries(L.controls)) {
+    if (x >= b.x - 2 && x < b.x + b.w + 2 && y >= b.y - 2 && y < b.y + b.h + 2) return name;
+  }
+  return null;
+}
+cv.addEventListener("pointerdown", e => {
+  const btn = hitButton(e);
+  if (!btn) return;
+  cv.setPointerCapture(e.pointerId);
+  pointerBtn.set(e.pointerId, btn);
+  press(btn);
+});
+const endPointer = e => { const b = pointerBtn.get(e.pointerId); if (b) { release(b); pointerBtn.delete(e.pointerId); } };
+cv.addEventListener("pointerup", endPointer);
+cv.addEventListener("pointercancel", endPointer);
+cv.addEventListener("pointermove", e => { cv.style.cursor = hitButton(e) ? "pointer" : "default"; });
+
+// ---------------------------------------------------------------- update
+function update(dt) {
+  stateT += dt;
+  shake = Math.max(0, shake - dt);
+  popups.forEach(p => p.t += dt);
+  popups = popups.filter(p => p.t < 1.2);
+
+  if (state === "boot") {
+    if (stateT >= 1.1 && stateT - dt < 1.1) sfx("ding");
+    if (stateT >= BOOT_TIME) setState("title");
+    return;
+  }
+  if (state === "clearing") { clearT += dt; if (clearT >= CLEAR_TIME) finishClear(); return; }
+  if (state === "playing") playTime += dt;
+  if (state !== "playing" || !cur) return;
+
+  if (dir) {
+    dasT += dt;
+    if (dasT >= DAS) {
+      arrT += dt;
+      while (arrT >= ARR) { arrT -= ARR; if (!move(dir)) { arrT = 0; break; } }
+    }
+  }
+
+  const g = held.down ? Math.min(gravity(), 0.035) : gravity();
+  fallAcc += dt;
+  while (fallAcc >= g) {
+    fallAcc -= g;
+    if (grounded()) { fallAcc = 0; break; }
+    cur.y++;
+    if (held.down) score += 1;
+    if (cur.y > lowestY) { lowestY = cur.y; resets = 0; }
+  }
+  if (grounded()) {
+    lockT += dt;
+    if (lockT >= LOCK_DELAY) lock();
+  } else lockT = 0;
+}
+
+// ---------------------------------------------------------------- draw
+const blink = (period = 1) => (performance.now() / 1000) % period < period / 2;
+
+function dotBg(w, h, bg, dot, step = 4) {
+  rect(0, 0, w, h, bg);
+  ctx.fillStyle = dot;
+  for (let y = 2; y < h; y += step) for (let x = 2; x < w; x += step) ctx.fillRect(x, y, 1, 1);
+}
+function panel(x, y, w, h) { rect(x - 1, y - 1, w + 2, h + 2, C.frameLite); rect(x, y, w, h, C.well); }
+
+// A little retro-OS window, like the reference desktop dialogs
+function dialog(x, y, w, h, title, bar, body, button) {
+  rect(x + 2, y + 2, w, h, "rgba(5,7,15,.6)");
+  rect(x - 1, y - 1, w + 2, h + 2, C.navy);
+  rect(x, y, w, h, C.cream);
+  rect(x, y, w, 9, bar);
+  text(title, x + 3, y + 2, C.cream);
+  // window controls
+  for (let i = 0; i < 2; i++) {
+    const bx = x + w - 9 - i * 8;
+    rect(bx, y + 1, 7, 7, C.navy); rect(bx + 1, y + 2, 5, 5, C.cream);
+    if (i === 0) { for (let k = 0; k < 3; k++) { rect(bx + 2 + k, y + 3 + k, 1, 1, C.navy); rect(bx + 4 - k, y + 3 + k, 1, 1, C.navy); } }
+    else rect(bx + 2, y + 5, 3, 1, C.navy);
+  }
+  let ty = y + 14;
+  for (const line of body) {
+    const [str, col, k] = Array.isArray(line) ? line : [line, C.navy, 1];
+    textC(str, x + w / 2, ty, col, k || 1);
+    ty += 5 * (k || 1) + 4;
+  }
+  if (button) {
+    const bw = textW(button) + 10, bx = Math.round(x + w / 2 - bw / 2), by = y + h - 14;
+    const on = blink(0.9);
+    rect(bx - 1, by - 1, bw + 3, 12, C.navy);
+    rect(bx, by, bw, 9, on ? C.teal : C.creamShade);
+    rect(bx, by + 8, bw, 1, on ? "#1f7389" : "#b9ad8a");
+    textC(button, bx + bw / 2, by + 2, on ? C.cream : C.navy);
+  }
+}
+
+function drawPreview(type, cx, cy, alpha = 1) {
+  const cells = SHAPES[type][0];
+  const xs = cells.map(c => c[0]), ys = cells.map(c => c[1]);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  const w = (Math.max(...xs) - minX + 1) * T, h = (Math.max(...ys) - minY + 1) * T;
+  const ox = Math.round(cx - w / 2), oy = Math.round(cy - h / 2);
+  ctx.globalAlpha = alpha;
+  for (const [x, y] of cells) tile(type, ox + (x - minX) * T, oy + (y - minY) * T);
+  ctx.globalAlpha = 1;
+}
+
+function drawGame() {
+  const Lw = L.lcd.w;
+  dotBg(Lw, L.lcd.h, C.lcd, C.lcdDot);
+
+  // left column
+  text("HOLD", 4, 4, C.label);
+  panel(HOLDBOX.x, HOLDBOX.y, HOLDBOX.w, HOLDBOX.h);
+  if (hold !== null) drawPreview(hold, HOLDBOX.x + HOLDBOX.w / 2, HOLDBOX.y + HOLDBOX.h / 2, canHold ? 1 : 0.35);
+  text("LEVEL", 4, 44, C.label);
+  text(level, 4, 51, C.value, 2);
+  text("LINES", 4, 68, C.label);
+  text(lines, 4, 75, C.value, 2);
+  text("TIME", 4, 92, C.label);
+  const secs = Math.floor(playTime);
+  text(Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0"), 4, 99, C.value, 2);
+  text("TETRIS", 4, 116, C.label);
+  text(tetrises, 4, 123, C.pink, 2);
+  text("SOUND", 4, 144, C.label);
+  text(muted ? "OFF" : "ON", 4, 151, muted ? C.coral : C.sage);
+
+  // right column
+  text("NEXT", 134, 4, C.label);
+  panel(NEXTBOX.x, NEXTBOX.y, NEXTBOX.w, NEXTBOX.h);
+  for (let i = 0; i < 3; i++) drawPreview(queue[i], NEXTBOX.x + NEXTBOX.w / 2, NEXTBOX.y + 13 + i * 25);
+  text("SCORE", 134, 94, C.label);
+  text(score, 134, 101, C.value);
+  text("BEST", 134, 112, C.label);
+  text(Math.max(best, score), 134, 119, C.yellow);
+  text("GOAL", 134, 132, C.label);
+  const done = lines % 10;
+  for (let i = 0; i < 10; i++) {
+    rect(134 + i * 4, 139, 3, 7, i < done ? RAINBOW[i % RAINBOW.length] : C.well);
+    if (i < done) rect(134 + i * 4, 139, 3, 1, "rgba(255,255,255,.45)");
+  }
+  text((10 - done) + " TO GO", 134, 150, C.dim);
+
+  // well
+  const sy = shake > 0 ? 1 : 0;
+  rect(WELL.x - 2, WELL.y - 2, 84, 164, C.frameDark);
+  rect(WELL.x - 1, WELL.y - 1, 82, 162, C.frameLite);
+  ctx.save();
+  ctx.translate(WELL.x, WELL.y + sy);
+  dotBg(COLS * T, 20 * T, C.well, C.wellDot, 8);
+
+  const deadRows = state === "over" ? Math.floor(stateT * 26) : -1;
+  for (let y = HIDDEN; y < ROWS; y++) {
+    const vy = y - HIDDEN;
+    for (let x = 0; x < COLS; x++) {
+      if (vy < deadRows) tile(DEAD, x * T, vy * T);
+      else if (board[y][x] >= 0) tile(board[y][x], x * T, vy * T);
+    }
+  }
+  if (state === "clearing") {
+    const on = Math.floor(clearT / 0.06) % 2 === 0;
+    ctx.fillStyle = on ? "rgba(243,236,210,.9)" : "rgba(243,236,210,.15)";
+    const w = COLS * T * Math.max(0, 1 - clearT / CLEAR_TIME);
+    for (const y of clearRows) ctx.fillRect((COLS * T - w) / 2, (y - HIDDEN) * T, w, T);
+  }
+  if (cur && (state === "playing" || state === "paused")) {
+    const gd = dropDistance();
+    for (const [cx, cy] of SHAPES[cur.type][cur.rot]) {
+      const gy = cur.y + cy + gd - HIDDEN;
+      if (gy >= 0) tile(GHOST, (cur.x + cx) * T, gy * T);
+    }
+    for (const [cx, cy] of SHAPES[cur.type][cur.rot]) {
+      const y = cur.y + cy - HIDDEN;
+      if (y >= 0) tile(cur.type, (cur.x + cx) * T, y * T);
+    }
+  }
+  for (const p of popups) {
+    const y = Math.round(64 - p.t * 24);
+    if (p.t > 0.9 && Math.floor(p.t * 20) % 2) continue;
+    textC(p.text, COLS * T / 2 + 1, y + 1, C.frameDark, 2);
+    textC(p.text, COLS * T / 2, y, RAINBOW, 2);
+  }
+  ctx.restore();
+
+  if (state === "paused") {
+    rect(WELL.x, WELL.y, COLS * T, 20 * T, "rgba(12,17,34,.85)");
+    dialog(28, 56, 120, 52, "PAUSED", C.mustard, ["TAKE A BREAK", ["@", C.coral]], "RESUME");
+  }
+  if (state === "over" && stateT > 0.9) {
+    const body = [["SCORE", C.dim], [score, C.navy, 2]];
+    if (newBest) body.push(["NEW BEST!", C.coral]);
+    dialog(28, 46, 120, newBest ? 76 : 66, "GAME OVER", C.coral, body, "RETRY");
+  }
+}
+
+// Title-screen skyline of stacked blocks
+const SKY = (() => {
+  let s = 7; const rnd = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const heights = [2,3,3,1,2,4,4,2,1,3,2,2,3,4,1,1,2,3,3,2,4,3];
+  return heights.map(h => Array.from({ length: h }, () => rnd() * 7 | 0));
+})();
+
+function drawTitle() {
+  dotBg(L.lcd.w, L.lcd.h, C.lcd, C.lcdDot);
+  SKY.forEach((col, x) => col.forEach((t, i) => tile(t, x * T, L.lcd.h - (i + 1) * T)));
+  ctx.drawImage(IMG.logo, 19, 12);
+  shadowText("HI " + String(best).padStart(6, "0"), 88, 50, C.yellow);
+  dialog(30, 66, 116, 54, "WELCOME.EXE", C.teal, ["READY TO PLAY?", ["@ KOROBEINIKI @", C.coral]], "START");
+  const tw = [[12, 58], [160, 48], [150, 84], [18, 96], [100, 128], [60, 132]];
+  tw.forEach(([x, y], i) => { if ((Math.floor(performance.now() / 400) + i) % 3) text("*", x, y, RAINBOW[i]); });
+}
+
+function drawBoot() {
+  dotBg(L.lcd.w, L.lcd.h, C.lcd, C.lcdDot);
+  const t = Math.min(1, stateT / 1.1);
+  const y = Math.round(-32 + (68 + 32) * t);
+  ctx.drawImage(IMG.logo, 19, y);
+  if (stateT > 1.2) shadowText("PIXEL BOY", 88, 108, RAINBOW);
+  if (stateT > 1.5) textC("2026 VIRGILIO SOFT", 88, 122, C.dim);
+}
+
+function drawOff() {
+  rect(0, 0, L.lcd.w, L.lcd.h, "#141a2c");
+  if (blink(1.4)) { textC("PRESS START", 88, 78, C.dim); textC("< ENTER >", 88, 88, "#48517a"); }
+}
+
+// Faint LCD scanlines + a glass glint
+function glass() {
+  ctx.fillStyle = "rgba(0,0,0,.10)";
+  for (let y = 1; y < L.lcd.h; y += 2) ctx.fillRect(0, y, L.lcd.w, 1);
+  ctx.fillStyle = "rgba(255,255,255,.05)";
+  for (let i = 0; i < 26; i++) { ctx.fillRect(140 + i, i, 3, 1); ctx.fillRect(152 + i, i, 1, 1); }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, L.W, L.H);
+  ctx.drawImage(IMG.device, 0, 0);
+  const lits = [...lit];
+  if (state !== "off") lits.push("power", "led");
+  for (const name of lits) {
+    const b = L.controls[name] || L[name];
+    ctx.drawImage(IMG.pressed, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
+  }
+  ctx.save();
+  ctx.translate(L.lcd.x, L.lcd.y);
+  ctx.beginPath(); ctx.rect(0, 0, L.lcd.w, L.lcd.h); ctx.clip();
+  if (state === "off") drawOff();
+  else if (state === "boot") drawBoot();
+  else if (state === "title") drawTitle();
+  else drawGame();
+  glass();
+  ctx.restore();
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+Promise.all(Object.entries({
+  device: "assets/device.png", pressed: "assets/device-pressed.png", tiles: "assets/tiles.png",
+  font: "assets/font.png", logo: "assets/logo.png",
+}).map(([k, src]) => loadImg(src).then(i => IMG[k] = i))).then(() => requestAnimationFrame(frame));
+</script>
+</body>
+</html>
