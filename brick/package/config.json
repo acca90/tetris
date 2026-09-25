@@ -1,0 +1,8 @@
+{
+"package":"com.acca90.pixeltetris",
+"label":"Pixel Tetris",
+"icontop":"icon.png",
+"icon":"",
+"launch":"launch.sh",
+"description":"Pixel Boy Tetris"
+}

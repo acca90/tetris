@@ -373,6 +373,35 @@ for y, row in ipairs(CURSOR) do
 end
 cur:save("cursor")
 
+-- App icon for the TrimUI Brick menu: a mini Pixel Boy, drawn at 50x50, saved 6x (300x300)
+local ico = Canvas(50, 50)
+ico:rrect(9, 3, 34, 45, { 4, 4, 10, 4 }, NAVY)
+ico:rrect(8, 2, 34, 45, { 4, 4, 10, 4 }, NAVY)
+ico:rrect(9, 3, 32, 43, { 3, 3, 9, 3 }, CREAM)
+ico:rect(10, 4, 30, 1, HILITE)
+ico:rrect(11, 6, 28, 22, { 2, 2, 6, 2 }, BEZEL)
+ico:rect(14, 9, 22, 17, 0x1b2340)
+local mini = { { 15, 21, TEAL }, { 18, 21, TEAL }, { 21, 21, TEAL }, { 24, 21, CORAL }, { 27, 21, CORAL },
+               { 27, 18, CORAL }, { 30, 21, YELLOW }, { 33, 21, YELLOW }, { 30, 18, YELLOW }, { 33, 18, YELLOW },
+               { 21, 12, LAV }, { 24, 12, LAV }, { 27, 12, LAV }, { 24, 15, LAV } }
+for _, b in ipairs(mini) do
+  ico:rect(b[1], b[2], 3, 3, b[3]); ico:px(b[1], b[2], lighten(b[3], 0.5))
+  ico:rect(b[1] + 2, b[2], 1, 3, darken(b[3], 0.35)); ico:rect(b[1], b[2] + 2, 3, 1, darken(b[3], 0.35))
+end
+ico:rect(15, 33, 3, 9, NAVY); ico:rect(12, 36, 9, 3, NAVY)
+ico:circle(31.5, 38.5, 2.6, NAVY); ico:circle(31.5, 38.5, 1.8, MUSTARD)
+ico:circle(36.5, 35.5, 2.6, NAVY); ico:circle(36.5, 35.5, 1.8, CORAL)
+local big = Canvas(300, 300)
+for y = 0, 49 do for x = 0, 49 do
+  local p = ico.img:getPixel(x, y)
+  local a = pc.rgbaA(p)
+  if a > 0 then
+    local col = (pc.rgbaR(p) << 16) | (pc.rgbaG(p) << 8) | pc.rgbaB(p)
+    big:rect(x * 6, y * 6, 6, 6, col, a)
+  end
+end end
+big:save("icon")
+
 -- Layout for the game ------------------------------------------------------------
 local function r(x, y, w, h) return string.format("{x:%d,y:%d,w:%d,h:%d}", x, y, w, h) end
 local f = io.open(root .. "/assets/layout.js", "w")

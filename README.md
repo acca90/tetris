@@ -28,6 +28,33 @@ The image is nginx (unprivileged, Alpine) serving `index.html` and `assets/` on 
 
 Open `index.html` directly in a browser.
 
+## TrimUI Brick (and other RetroArch handhelds)
+
+`brick/` is a C port of the game as a **libretro core**, so it runs inside RetroArch on the device —
+no system libraries needed beyond libc (built against GLIBC 2.17). It draws the Pixel Boy screen
+at 256×192 with a slim bezel and upscales 4× to the Brick's 1024×768 panel itself.
+
+```bash
+brick/build-brick.sh        # cross-compiles in Docker -> brick/dist/PixelTetris/
+```
+
+Copy `brick/dist/PixelTetris/` to `/mnt/SDCARD/Apps/` on the stock TrimUI OS card; it appears in
+**Apps** as *Pixel Tetris*. Best score is kept in RetroArch's saves dir as `pixeltetris.hi`.
+Exit via the MENU button → Quit RetroArch.
+
+| Button | Action |
+|---|---|
+| D-pad ← → | Move |
+| ↓ | Soft drop |
+| ↑ / Y | Hard drop |
+| A / B | Rotate clockwise / counter-clockwise |
+| X / L / R | Hold |
+| Start | Start / pause |
+| Select | Mute |
+
+For desktop testing: `make -C brick && retroarch -L brick/build/native/pixeltetris_libretro.so`,
+or run the scripted headless check `python3 brick/tools/harness.py brick/build/native/pixeltetris_libretro.so /tmp/out`.
+
 ## Controls
 
 | Key | Action |
