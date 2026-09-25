@@ -1,0 +1,6 @@
+.git
+art
+*.md
+Dockerfile
+compose.yaml
+.dockerignore

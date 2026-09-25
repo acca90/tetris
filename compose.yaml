@@ -1,0 +1,8 @@
+services:
+  tetris:
+    build: .
+    image: pixel-boy-tetris
+    container_name: pixel-boy-tetris
+    ports:
+      - "${TETRIS_PORT:-8080}:8080"
+    restart: unless-stopped
