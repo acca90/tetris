@@ -87,6 +87,8 @@ const L = window.LAYOUT;
 // ---------------------------------------------------------------- constants
 const COLS = 10, ROWS = 22, HIDDEN = 2, T = 8;
 const GHOST = 7, DEAD = 8;
+// soft drop: a tap moves one row; holding repeats after SOFT_DELAY, every SOFT_RATE
+const SOFT_DELAY = 0.15, SOFT_RATE = 0.07;
 const DAS = 0.16, ARR = 0.04, LOCK_DELAY = 0.5, MAX_RESETS = 15, CLEAR_TIME = 0.36;
 const BOOT_TIME = 2.4;
 
@@ -314,7 +316,7 @@ try { best = +localStorage.getItem("pixel-tetris.best") || 0; } catch {}
 
 const held = { left: false, right: false, down: false };
 const lit = new Set();            // device buttons drawn pressed
-let dir = 0, dasT = 0, arrT = 0;
+let dir = 0, dasT = 0, arrT = 0, softT = 0;
 
 function setState(s) { state = s; stateT = 0; }
 
@@ -370,6 +372,12 @@ function rotate(d) {
       cur.x += kx; cur.y -= ky; cur.rot = to; afterMove(); sfx("rotate"); return;
     }
   }
+}
+function softStep() {
+  if (grounded()) return false;
+  cur.y++; score += 1;
+  if (cur.y > lowestY) { lowestY = cur.y; resets = 0; }
+  return true;
 }
 function dropDistance() {
   let d = 0;
@@ -448,7 +456,7 @@ const KEYMAP = {
 function press(btn, repeat = false) {
   ensureAudio();
   if (L.controls[btn]) lit.add(btn);
-  if (repeat && btn !== "down") return;
+  if (repeat) return;
 
   if (btn === "select") {
     muted = !muted; if (master) master.gain.value = muted ? 0 : 0.5;
@@ -466,7 +474,7 @@ function press(btn, repeat = false) {
   switch (btn) {
     case "left":  held.left = true;  dir = -1; dasT = arrT = 0; move(-1); break;
     case "right": held.right = true; dir = 1;  dasT = arrT = 0; move(1); break;
-    case "down":  held.down = true; break;
+    case "down":  held.down = true; softT = -SOFT_DELAY; softStep(); break;
     case "up":    rotate(1); break;
     case "ccw":   rotate(-1); break;
     case "a":     hardDrop(); break;
@@ -542,13 +550,17 @@ function update(dt) {
     }
   }
 
-  const g = held.down ? Math.min(gravity(), 0.035) : gravity();
+  if (held.down) {
+    softT += dt;
+    while (softT >= SOFT_RATE) { softT -= SOFT_RATE; if (!softStep()) { softT = 0; break; } }
+  }
+
+  const g = gravity();
   fallAcc += dt;
   while (fallAcc >= g) {
     fallAcc -= g;
     if (grounded()) { fallAcc = 0; break; }
     cur.y++;
-    if (held.down) score += 1;
     if (cur.y > lowestY) { lowestY = cur.y; resets = 0; }
   }
   if (grounded()) {

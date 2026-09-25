@@ -36,6 +36,9 @@
 #define DEAD 8
 #define DAS 0.16
 #define ARR 0.04
+/* soft drop: a tap moves one row; holding repeats after SOFT_DELAY, every SOFT_RATE */
+#define SOFT_DELAY 0.15
+#define SOFT_RATE 0.07
 #define LOCK_DELAY 0.5
 #define MAX_RESETS 15
 #define CLEAR_TIME 0.36
@@ -307,7 +310,7 @@ static int clear_rows[4], nclear; static double clear_t;
 typedef struct { char text[16]; double t; } Popup;
 static Popup popups[4]; static int npop;
 static double shake;
-static bool held_l, held_r, held_d; static int dir; static double das_t, arr_t;
+static bool held_l, held_r, held_d; static int dir; static double das_t, arr_t, soft_t;
 static uint32_t rng = 0x9e3779b9;
 
 static void set_state(int s) { state = s; state_t = 0; }
@@ -392,6 +395,12 @@ static void rotate(int d) {
       }
     }
   }
+}
+static bool soft_step(void) {
+  if (grounded()) return false;
+  cur.y++; score += 1;
+  if (cur.y > lowest_y) { lowest_y = cur.y; resets = 0; }
+  return true;
 }
 static int drop_distance(void) {
   int d = 0;
@@ -495,8 +504,10 @@ static void handle_input(void) {
     if (PRESSED(RETRO_DEVICE_ID_JOYPAD_RIGHT)) { held_r = true; dir = 1;  das_t = arr_t = 0; move(1); }
     if (a) rotate(1);
     if (PRESSED(RETRO_DEVICE_ID_JOYPAD_B)) rotate(-1);
-    if (PRESSED(RETRO_DEVICE_ID_JOYPAD_X) || PRESSED(RETRO_DEVICE_ID_JOYPAD_L) || PRESSED(RETRO_DEVICE_ID_JOYPAD_R)) do_hold();
-    if (has_cur && (PRESSED(RETRO_DEVICE_ID_JOYPAD_UP) || PRESSED(RETRO_DEVICE_ID_JOYPAD_Y))) hard_drop();
+    if (PRESSED(RETRO_DEVICE_ID_JOYPAD_DOWN)) { soft_t = -SOFT_DELAY; soft_step(); }
+    if (PRESSED(RETRO_DEVICE_ID_JOYPAD_X) || PRESSED(RETRO_DEVICE_ID_JOYPAD_Y) ||
+        PRESSED(RETRO_DEVICE_ID_JOYPAD_L) || PRESSED(RETRO_DEVICE_ID_JOYPAD_R)) do_hold();
+    if (has_cur && PRESSED(RETRO_DEVICE_ID_JOYPAD_UP)) hard_drop();
   }
   memcpy(prev, now, sizeof prev);
 }
@@ -526,14 +537,17 @@ static void update(void) {
       while (arr_t >= ARR) { arr_t -= ARR; if (!move(dir)) { arr_t = 0; break; } }
     }
   }
+  if (held_d) {
+    soft_t += DT;
+    while (soft_t >= SOFT_RATE) { soft_t -= SOFT_RATE; if (!soft_step()) { soft_t = 0; break; } }
+  }
+
   double g = gravity();
-  if (held_d && g > 0.035) g = 0.035;
   fall_acc += DT;
   while (fall_acc >= g) {
     fall_acc -= g;
     if (grounded()) { fall_acc = 0; break; }
     cur.y++;
-    if (held_d) score += 1;
     if (cur.y > lowest_y) { lowest_y = cur.y; resets = 0; }
   }
   if (grounded()) { lock_t += DT; if (lock_t >= LOCK_DELAY) lock_piece(); }
@@ -721,7 +735,7 @@ static void draw_bezel(void) {
 
   /* right: control hints */
   static const char *hints[6][2] = {
-    { "A B", "ROTATE" }, { "UP Y", "DROP" }, { "X L R", "HOLD" },
+    { "A B", "ROTATE" }, { "UP", "DROP" }, { "X Y L R", "HOLD" },
     { "DOWN", "SOFT" }, { "START", "PAUSE" }, { "SELECT", "MUTE" },
   };
   for (int i = 0; i < 6; i++) {
@@ -842,7 +856,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game) {
     { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Move right" },
     { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN, "Soft drop" },
     { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP, "Hard drop" },
-    { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Hard drop" },
+    { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Hold" },
     { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A, "Rotate clockwise" },
     { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B, "Rotate counter-clockwise" },
     { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Hold" },

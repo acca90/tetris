@@ -46,9 +46,9 @@ Exit via the MENU button → Quit RetroArch.
 |---|---|
 | D-pad ← → | Move |
 | ↓ | Soft drop |
-| ↑ / Y | Hard drop |
+| ↑ | Hard drop |
 | A / B | Rotate clockwise / counter-clockwise |
-| X / L / R | Hold |
+| X / Y / L / R | Hold |
 | Start | Start / pause |
 | Select | Mute |
 
